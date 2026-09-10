@@ -20,6 +20,8 @@ export interface RhwpImportOptions {
   footerText?: string;
 }
 
+type HtmlPasteDocument = Pick<HwpDocument, 'pasteHtml' | 'insertParagraph'>;
+
 let initialization: Promise<void> | null = null;
 
 function installTextMeasurement() {
@@ -56,31 +58,57 @@ export async function openRhwp(bytes: Uint8Array): Promise<HwpDocument> {
 export async function createRhwpFromHtml(html: string, options: RhwpImportOptions = {}): Promise<HwpDocument> {
   await ensureRhwp();
   const document = HwpDocument.createEmpty();
-  let paraIdx = 0;
-  let charOffset = 0;
 
   try {
-    // rHWP 0.8.6 can panic when a table follows multiple block elements in one
-    // pasteHtml call. Insert Mammoth's top-level semantic blocks sequentially.
-    for (const block of splitTopLevelHtmlBlocks(html)) {
-      const result = JSON.parse(document.pasteHtml(0, paraIdx, charOffset, block)) as {
-        ok?: boolean;
-        error?: string;
-        paraIdx?: number;
-        charOffset?: number;
-      };
-      if (result.ok === false) {
-        throw new Error(result.error ?? 'DOCX 내용을 OmniDocs 문서 모델로 변환하지 못했습니다.');
-      }
-      paraIdx = result.paraIdx ?? paraIdx;
-      charOffset = result.charOffset ?? charOffset;
-    }
+    pasteTopLevelHtmlBlocks(document, html);
     applyImportLayout(document, options);
     return document;
   } catch (error) {
     // A Rust panic can poison the borrowed WASM value; free only for ordinary JS errors.
     if (!(error instanceof WebAssembly.RuntimeError)) document.free();
     throw error;
+  }
+}
+
+/**
+ * Inserts Mammoth HTML without collapsing adjacent Word paragraphs.
+ *
+ * rHWP 0.8.6's pasteHtml() is cursor-oriented: a standalone <p> pasted at the
+ * end of the current paragraph does not implicitly create a following paragraph.
+ * Calling it again at the returned cursor therefore merges adjacent DOCX blocks.
+ * Explicitly create the next body paragraph with insertParagraph(index).
+ */
+export function pasteTopLevelHtmlBlocks(document: HtmlPasteDocument, html: string): void {
+  let paraIdx = 0;
+  let charOffset = 0;
+  const blocks = splitTopLevelHtmlBlocks(html);
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const result = JSON.parse(document.pasteHtml(0, paraIdx, charOffset, blocks[index])) as {
+      ok?: boolean;
+      error?: string;
+      paraIdx?: number;
+      charOffset?: number;
+    };
+    if (result.ok === false) {
+      throw new Error(result.error ?? 'DOCX 내용을 OmniDocs 문서 모델로 변환하지 못했습니다.');
+    }
+    paraIdx = result.paraIdx ?? paraIdx;
+    charOffset = result.charOffset ?? charOffset;
+
+    if (index < blocks.length - 1) {
+      const nextParaIdx = paraIdx + 1;
+      const inserted = JSON.parse(document.insertParagraph(0, nextParaIdx)) as {
+        ok?: boolean;
+        error?: string;
+        paraIdx?: number;
+      };
+      if (inserted.ok === false) {
+        throw new Error(inserted.error ?? 'DOCX 문단 경계를 OMDX에 생성하지 못했습니다.');
+      }
+      paraIdx = inserted.paraIdx ?? nextParaIdx;
+      charOffset = 0;
+    }
   }
 }
 
