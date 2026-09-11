@@ -58,10 +58,10 @@ Mammoth transform에서 이미 읽힌 explicit alignment/indent/font/fontSize/hi
 `word/document.xml`과 relationship part에서 직접 추출합니다.
 
 현재 DOCX export는 `canonical HWPX XML -> WordprocessingML parts -> DOCX ZIP` 경로입니다. 문단/런의
-직접 서식, 번호 목록, 표와 병합 셀, 이미지 resource, section page geometry, column, header/footer를 OOXML로
-직접 serialize합니다. floating 그림은 `wp:anchor`, floating 표는 `w:tblpPr`로 위치/정렬/offset/wrap 정보를
-보존하고, HWP equation script의 분수·첨자·제곱근·합/곱/적분은 OMML로 구조화합니다. 페이지 렌더 HTML은
-DOCX 저장 경로에서 사용하지 않습니다.
+직접 서식, 번호 목록, 표와 병합 셀, 이미지 resource, 기본 DrawingML 도형, 각주/미주 part, section page
+geometry, column, header/footer를 OOXML로 직접 serialize합니다. floating 그림은 `wp:anchor`, floating 표는
+`w:tblpPr`로 위치/정렬/offset/wrap 정보를 보존하고, HWP equation script의 분수·첨자·제곱근·합/곱/적분은
+OMML로 구조화합니다. 페이지 렌더 HTML은 DOCX 저장 경로에서 사용하지 않습니다.
 
 ### `src/ui`
 
@@ -137,7 +137,9 @@ Studio HTML/JS/CSS/WASM/폰트/이미지 자원을 수집하고 JS bundle에 고
 - direct writer의 문단/런/표/병합 셀/이미지/section/header-footer 기본 매핑 — 완료
 - floating image `wp:anchor` / floating table `w:tblpPr` 기본 위치 매핑 — 완료
 - HWP equation → OMML 기본 변환(분수/상·하첨자/제곱근/합·곱·적분) — 완료
-- 복잡 수식 문법, 도형/DrawingML, 각주/미주, field의 정밀 매핑은 fixture 기반으로 확대
+- 사각형/타원/선 → DrawingML word-processing shape 기본 매핑 — 완료
+- 각주/미주 → `footnotes.xml` / `endnotes.xml` 및 본문 reference 매핑 — 완료
+- 복잡 수식 문법, 자유곡선/복합 도형, field/차트/OLE의 정밀 매핑은 fixture 기반으로 확대
 - 문서 호환 요구가 자체 writer의 범위를 넘는 경우 LibreOfficeKit/Collabora converter를 adapter 내부 대체 구현으로 도입
 
 ### M4 — Desktop packaging

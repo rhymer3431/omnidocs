@@ -92,11 +92,11 @@ current canonical ───┼──> .hwpx  canonical 그대로
 ```
 
 DOCX writer는 `renderPageHtml()` 같은 화면 렌더 결과를 저장에 사용하지 않습니다. canonical HWPX의
-문단/글자 속성, 표/셀 병합, 이미지 binary resource, section의 용지/여백/단, 머리말/꼬리말을 읽어
-OOXML part와 relationship을 직접 생성합니다. 떠있는 그림은 `wp:anchor`, 떠있는 표는 `w:tblpPr`로
-위치와 wrapping 정보를 매핑합니다. HWP equation script는 분수, 상/하첨자, 제곱근, 합/곱/적분을
-Word OMML 노드로 구조화하고 지원하지 않는 고급 수식 문법은 편집 가능한 수식 텍스트로 보존하면서
-호환성 경고를 기록합니다.
+문단/글자 속성, 표/셀 병합, 이미지 binary resource, 사각형/타원/선, 각주/미주, section의 용지/여백/단,
+머리말/꼬리말을 읽어 OOXML part와 relationship을 직접 생성합니다. 떠있는 그림은 `wp:anchor`, 떠있는 표는
+`w:tblpPr`로 위치와 wrapping 정보를 매핑하고 도형은 DrawingML word-processing shape로 저장합니다.
+HWP equation script는 분수, 상/하첨자, 제곱근, 합/곱/적분을 Word OMML 노드로 구조화합니다. 각주/미주는
+본문 reference와 `word/footnotes.xml`/`word/endnotes.xml`로 분리 저장하며, 지원하지 않는 고급 기능은 호환성 경고를 기록합니다.
 
 원본이 DOCX/HWP/HWPX이고 canonical이 import 이후 바뀌지 않았다면 해당 원본 형식 저장은 원본 바이트를
 그대로 사용한다. 이 경로는 unknown/unsupported feature까지 보존하므로 가장 강한 no-op round trip이다.

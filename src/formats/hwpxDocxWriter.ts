@@ -5,6 +5,7 @@ const REL_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationsh
 const PKG_REL_NS = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const CONTENT_TYPES_NS = 'http://schemas.openxmlformats.org/package/2006/content-types';
 const MATH_NS = 'http://schemas.openxmlformats.org/officeDocument/2006/math';
+const WPS_NS = 'http://schemas.microsoft.com/office/word/2010/wordprocessingShape';
 
 export interface HwpxDocxExportResult {
   bytes: Uint8Array;
@@ -67,12 +68,20 @@ interface SectionState {
   headerFooters: Map<string, HeaderFooterPart>;
 }
 
+interface NotePart {
+  kind: 'footnote' | 'endnote';
+  id: number;
+  element: Element;
+}
+
 interface RenderContext {
   catalog: StyleCatalog;
   images: Map<string, ImageResource>;
   warnings: Set<string>;
   nextDrawingId: number;
   numberingIds: Map<string, number>;
+  footnotes: NotePart[];
+  endnotes: NotePart[];
 }
 
 interface PackageContext extends RenderContext {
@@ -110,6 +119,8 @@ export async function exportHwpxToDocx(hwpxBytes: Uint8Array): Promise<HwpxDocxE
     warnings,
     nextDrawingId: 1,
     numberingIds: new Map(),
+    footnotes: [],
+    endnotes: [],
     documentRelationships: [],
     headerFooterParts: [],
   };
@@ -183,6 +194,23 @@ export async function exportHwpxToDocx(hwpxBytes: Uint8Array): Promise<HwpxDocxE
     output.file('word/numbering.xml', renderNumbering(ctx.numberingIds));
   }
 
+  if (ctx.footnotes.length) {
+    ctx.documentRelationships.push(relationshipXml(
+      'rIdFootnotes',
+      'http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes',
+      'footnotes.xml',
+    ));
+    output.file('word/footnotes.xml', renderNotesPart('footnote', ctx.footnotes, ctx));
+  }
+  if (ctx.endnotes.length) {
+    ctx.documentRelationships.push(relationshipXml(
+      'rIdEndnotes',
+      'http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes',
+      'endnotes.xml',
+    ));
+    output.file('word/endnotes.xml', renderNotesPart('endnote', ctx.endnotes, ctx));
+  }
+
   output.file('[Content_Types].xml', renderContentTypes(ctx));
   output.file('_rels/.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${PKG_REL_NS}">${relationshipXml(
     'rId1',
@@ -199,7 +227,7 @@ export async function exportHwpxToDocx(hwpxBytes: Uint8Array): Promise<HwpxDocxE
   )}</Relationships>`);
   output.file('word/_rels/document.xml.rels', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="${PKG_REL_NS}">${ctx.documentRelationships.join('')}</Relationships>`);
   output.file('word/document.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="${WORD_NS}" xmlns:r="${REL_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="${MATH_NS}"><w:body>${bodyXml}${finalSectionXml}</w:body></w:document>`);
+<w:document xmlns:w="${WORD_NS}" xmlns:r="${REL_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture" xmlns:m="${MATH_NS}" xmlns:wps="${WPS_NS}"><w:body>${bodyXml}${finalSectionXml}</w:body></w:document>`);
   output.file('word/styles.xml', renderStyles(catalog));
   output.file('word/settings.xml', renderSettings(ctx));
   output.file('docProps/core.xml', renderCoreProperties());
@@ -208,7 +236,7 @@ export async function exportHwpxToDocx(hwpxBytes: Uint8Array): Promise<HwpxDocxE
   for (const part of ctx.headerFooterParts) {
     const tag = part.kind === 'header' ? 'hdr' : 'ftr';
     const paragraphs = renderHeaderFooterParagraphs(part.element, ctx);
-    output.file(`word/${part.targetName}`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${tag} xmlns:w="${WORD_NS}" xmlns:r="${REL_NS}" xmlns:m="${MATH_NS}">${paragraphs || '<w:p/>'}</w:${tag}>`);
+    output.file(`word/${part.targetName}`, `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${tag} xmlns:w="${WORD_NS}" xmlns:r="${REL_NS}" xmlns:m="${MATH_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="${WPS_NS}">${paragraphs || '<w:p/>'}</w:${tag}>`);
   }
 
   const bytes = await output.generateAsync({
@@ -467,14 +495,16 @@ function renderTopLevelParagraph(paragraph: Element, ctx: RenderContext): string
   const hasNonTableContent = directRuns(paragraph).some((run) =>
     directChildren(run, 't').some((text) => meaningfulText(text.textContent ?? ''))
     || directChildren(run, 'pic').length > 0
-    || directChildren(run, 'equation').length > 0,
+    || directChildren(run, 'equation').length > 0
+    || Array.from(run.children).some((child) => isSupportedShapeName(child.localName))
+    || directChildren(run, 'ctrl').some((control) => Boolean(firstDirectChild(control, 'footNote') || firstDirectChild(control, 'endNote')))
   );
   if (hasNonTableContent) blocks.push(renderParagraph(paragraph, ctx, true));
   for (const table of tables) blocks.push(renderTable(table, ctx));
   return blocks.length ? blocks : ['<w:p/>'];
 }
 
-function renderParagraph(paragraph: Element, ctx: RenderContext, skipTables = false): string {
+function renderParagraph(paragraph: Element, ctx: RenderContext, skipTables = false, prefixRuns = ''): string {
   const pPrParts: string[] = [];
   const paraStyle = ctx.catalog.paragraphs.get(paragraph.getAttribute('paraPrIDRef') ?? '');
   if (paraStyle?.xml) pPrParts.push(paraStyle.xml);
@@ -484,27 +514,58 @@ function renderParagraph(paragraph: Element, ctx: RenderContext, skipTables = fa
   }
   if (paragraph.getAttribute('pageBreak') === '1') pPrParts.push('<w:pageBreakBefore/>');
 
-  const runs: string[] = [];
+  const runs: string[] = prefixRuns ? [prefixRuns] : [];
   for (const run of directRuns(paragraph)) {
     const charStyle = ctx.catalog.characters.get(run.getAttribute('charPrIDRef') ?? '');
     const rPr = charStyle?.xml ? `<w:rPr>${charStyle.xml}</w:rPr>` : '';
-    const pictures = directChildren(run, 'pic');
-    const hasPicture = pictures.length > 0;
-    const equations = directChildren(run, 'equation');
-    for (const textElement of directChildren(run, 't')) {
-      const value = textElement.textContent ?? '';
-      if (hasPicture && /^\[이미지\]$/.test(value.trim())) continue;
-      runs.push(renderTextRun(textElement, rPr));
-    }
-    for (const picture of pictures) runs.push(renderPictureRun(picture, rPr, ctx));
-    for (const equation of equations) runs.push(renderEquation(equation, ctx));
-    if (!skipTables && directChildren(run, 'tbl').length) {
-      ctx.warnings.add('한 문단 안의 표는 DOCX 블록 표로 정규화했습니다.');
+    const hasPicture = directChildren(run, 'pic').length > 0;
+    for (const child of Array.from(run.children)) {
+      switch (child.localName) {
+        case 't': {
+          const value = child.textContent ?? '';
+          if (hasPicture && /^\[이미지\]$/.test(value.trim())) break;
+          runs.push(renderTextRun(child, rPr));
+          break;
+        }
+        case 'pic':
+          runs.push(renderPictureRun(child, rPr, ctx));
+          break;
+        case 'equation':
+          runs.push(renderEquation(child, ctx));
+          break;
+        case 'ctrl': {
+          const rendered = renderRunControl(child, ctx);
+          if (rendered) runs.push(rendered);
+          break;
+        }
+        case 'tbl':
+          if (!skipTables) ctx.warnings.add('한 문단 안의 표는 DOCX 블록 표로 정규화했습니다.');
+          break;
+        default:
+          if (isSupportedShapeName(child.localName)) runs.push(renderShapeRun(child, rPr, ctx));
+          break;
+      }
     }
   }
 
   if (paragraph.getAttribute('columnBreak') === '1') runs.push('<w:r><w:br w:type="column"/></w:r>');
   return `<w:p>${pPrParts.length ? `<w:pPr>${pPrParts.join('')}</w:pPr>` : ''}${runs.join('')}</w:p>`;
+}
+
+function renderRunControl(control: Element, ctx: RenderContext): string {
+  const footnote = firstDirectChild(control, 'footNote');
+  if (footnote) return renderNoteReference('footnote', footnote, ctx);
+  const endnote = firstDirectChild(control, 'endNote');
+  if (endnote) return renderNoteReference('endnote', endnote, ctx);
+  return '';
+}
+
+function renderNoteReference(kind: NotePart['kind'], element: Element, ctx: RenderContext): string {
+  const collection = kind === 'footnote' ? ctx.footnotes : ctx.endnotes;
+  const id = collection.length + 1;
+  collection.push({ kind, id, element });
+  const style = kind === 'footnote' ? 'FootnoteReference' : 'EndnoteReference';
+  return `<w:r><w:rPr><w:rStyle w:val="${style}"/></w:rPr><w:${kind}Reference w:id="${id}"/></w:r>`;
 }
 
 function renderTextRun(textElement: Element, rPr: string): string {
@@ -548,15 +609,127 @@ function renderPictureRun(picture: Element, rPr: string, ctx: RenderContext): st
   return `<w:r>${rPr}${drawing}</w:r>`;
 }
 
+function renderShapeRun(shape: Element, rPr: string, ctx: RenderContext): string {
+  const currentSize = firstDescendant(shape, 'curSz') ?? firstDescendant(shape, 'sz');
+  const widthHu = finiteNumber(currentSize?.getAttribute('width')) ?? 7200;
+  const heightHu = finiteNumber(currentSize?.getAttribute('height')) ?? 3600;
+  const cx = Math.max(1, Math.round(widthHu * 127));
+  const cy = Math.max(1, Math.round(heightHu * 127));
+  const drawingId = ctx.nextDrawingId++;
+  const preset = mapShapePreset(shape);
+  const graphic = renderShapeGraphic(shape, preset, cx, cy, ctx);
+  const position = firstDescendant(shape, 'pos');
+  const description = firstDirectChild(shape, 'shapeComment')?.textContent?.trim() || undefined;
+  const meta = { name: `Shape ${drawingId}`, description };
+  const drawing = position && position.getAttribute('treatAsChar') !== '1'
+    ? renderAnchoredDrawing(shape, position, cx, cy, drawingId, graphic, ctx, meta)
+    : renderInlineDrawing(shape, cx, cy, drawingId, graphic, meta);
+  return `<w:r>${rPr}${drawing}</w:r>`;
+}
+
+function renderShapeGraphic(
+  shape: Element,
+  preset: string,
+  cx: number,
+  cy: number,
+  ctx: RenderContext,
+): string {
+  const rotation = firstDirectChild(shape, 'rotationInfo');
+  const flip = firstDirectChild(shape, 'flip');
+  const transformAttrs: string[] = [];
+  const angle = finiteNumber(rotation?.getAttribute('angle'));
+  if (angle) transformAttrs.push(`rot="${Math.round(angle * 60000)}"`);
+  if (isOne(flip?.getAttribute('horizontal') ?? null)) transformAttrs.push('flipH="1"');
+  if (isOne(flip?.getAttribute('vertical') ?? null)) transformAttrs.push('flipV="1"');
+
+  const fill = renderShapeFill(shape, preset);
+  const line = renderShapeLine(shape);
+  const subList = firstDirectChild(shape, 'subList');
+  const textBox = subList
+    ? `<wps:txbx><w:txbxContent>${directChildren(subList, 'p').map((paragraph) => renderParagraph(paragraph, ctx)).join('') || '<w:p/>'}</w:txbxContent></wps:txbx>`
+    : '';
+  const bodyPr = subList ? renderShapeBodyProperties(shape, subList) : '<wps:bodyPr/>';
+  return `<a:graphic><a:graphicData uri="${WPS_NS}"><wps:wsp><wps:cNvSpPr${subList ? ' txBox="1"' : ''}/><wps:spPr><a:xfrm${transformAttrs.length ? ` ${transformAttrs.join(' ')}` : ''}><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="${preset}"><a:avLst/></a:prstGeom>${fill}${line}</wps:spPr>${textBox}${bodyPr}</wps:wsp></a:graphicData></a:graphic>`;
+}
+
+function renderShapeFill(shape: Element, preset: string): string {
+  if (preset === 'line') return '<a:noFill/>';
+  const fillBrush = firstDirectChild(shape, 'fillBrush');
+  const winBrush = fillBrush ? firstDescendant(fillBrush, 'winBrush') : undefined;
+  const color = normalizeHex(winBrush?.getAttribute('faceColor') ?? winBrush?.getAttribute('color'));
+  return color ? `<a:solidFill><a:srgbClr val="${color}"/></a:solidFill>` : '<a:noFill/>';
+}
+
+function renderShapeLine(shape: Element): string {
+  const line = firstDirectChild(shape, 'lineShape');
+  if (!line) return '<a:ln><a:noFill/></a:ln>';
+  const width = Math.max(1, Math.round((finiteNumber(line.getAttribute('width')) ?? 33) * 127));
+  const color = normalizeHex(line.getAttribute('color')) ?? '000000';
+  const dash = mapDrawingLineDash(line.getAttribute('style'));
+  const head = mapDrawingArrow(line.getAttribute('headStyle'));
+  const tail = mapDrawingArrow(line.getAttribute('tailStyle'));
+  return `<a:ln w="${width}"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill><a:prstDash val="${dash}"/>${head ? `<a:headEnd type="${head}"/>` : ''}${tail ? `<a:tailEnd type="${tail}"/>` : ''}</a:ln>`;
+}
+
+function renderShapeBodyProperties(shape: Element, subList: Element): string {
+  const margin = firstDirectChild(shape, 'inMargin');
+  const vertical = (subList.getAttribute('vertAlign') ?? 'TOP').toUpperCase();
+  const anchor = vertical === 'CENTER' ? 'ctr' : vertical === 'BOTTOM' ? 'b' : 't';
+  const attrs = [
+    `anchor="${anchor}"`,
+    `lIns="${Math.max(0, Math.round((finiteNumber(margin?.getAttribute('left')) ?? 0) * 127))}"`,
+    `rIns="${Math.max(0, Math.round((finiteNumber(margin?.getAttribute('right')) ?? 0) * 127))}"`,
+    `tIns="${Math.max(0, Math.round((finiteNumber(margin?.getAttribute('top')) ?? 0) * 127))}"`,
+    `bIns="${Math.max(0, Math.round((finiteNumber(margin?.getAttribute('bottom')) ?? 0) * 127))}"`,
+  ];
+  return `<wps:bodyPr ${attrs.join(' ')}/>`;
+}
+
+function mapShapePreset(shape: Element): string {
+  switch (shape.localName) {
+    case 'ellipse': return 'ellipse';
+    case 'line':
+    case 'connectLine': return 'line';
+    case 'rect': {
+      const roundRate = finiteNumber(shape.getAttribute('ratio')) ?? 0;
+      return roundRate > 0 ? 'roundRect' : 'rect';
+    }
+    default: return 'rect';
+  }
+}
+
+function isSupportedShapeName(localName: string): boolean {
+  return localName === 'rect' || localName === 'ellipse' || localName === 'line' || localName === 'connectLine';
+}
+
+function mapDrawingLineDash(value: string | null): string {
+  const normalized = (value ?? 'SOLID').toUpperCase();
+  if (normalized.includes('DASH_DOT_DOT')) return 'lgDashDotDot';
+  if (normalized.includes('DASH_DOT')) return 'lgDashDot';
+  if (normalized.includes('DASH')) return 'dash';
+  if (normalized.includes('DOT')) return 'dot';
+  return 'solid';
+}
+
+function mapDrawingArrow(value: string | null): string | undefined {
+  const normalized = (value ?? 'NORMAL').toUpperCase();
+  if (normalized === 'NORMAL' || normalized === 'NONE') return undefined;
+  if (normalized.includes('DIAMOND')) return 'diamond';
+  if (normalized.includes('CIRCLE') || normalized.includes('OVAL')) return 'oval';
+  if (normalized.includes('STEALTH')) return 'stealth';
+  return 'triangle';
+}
+
 function renderInlineDrawing(
   object: Element,
   cx: number,
   cy: number,
   drawingId: number,
   graphic: string,
+  metadata: { name: string; description?: string } = { name: `Picture ${drawingId}` },
 ): string {
   const margin = objectMarginEmu(object);
-  return `<w:drawing><wp:inline distT="${margin.top}" distB="${margin.bottom}" distL="${margin.left}" distR="${margin.right}"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${drawingId}" name="Picture ${drawingId}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>${graphic}</wp:inline></w:drawing>`;
+  return `<w:drawing><wp:inline distT="${margin.top}" distB="${margin.bottom}" distL="${margin.left}" distR="${margin.right}"><wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/><wp:docPr id="${drawingId}" name="${escapeXml(metadata.name)}"${metadata.description ? ` descr="${escapeXml(metadata.description)}"` : ''}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>${graphic}</wp:inline></w:drawing>`;
 }
 
 function renderAnchoredDrawing(
@@ -567,6 +740,7 @@ function renderAnchoredDrawing(
   drawingId: number,
   graphic: string,
   ctx: RenderContext,
+  metadata: { name: string; description?: string } = { name: `Picture ${drawingId}` },
 ): string {
   const margin = objectMarginEmu(object);
   const wrap = renderAnchorWrap(object, ctx);
@@ -575,7 +749,7 @@ function renderAnchoredDrawing(
   const zOrder = Math.max(0, Math.trunc(finiteNumber(object.getAttribute('zOrder')) ?? 0));
   const allowOverlap = isOne(position.getAttribute('allowOverlap')) ? '1' : '0';
   const lock = isOne(object.getAttribute('lock')) ? '1' : '0';
-  return `<w:drawing><wp:anchor distT="${margin.top}" distB="${margin.bottom}" distL="${margin.left}" distR="${margin.right}" simplePos="0" relativeHeight="${Math.max(1, zOrder + 1)}" behindDoc="${behindDoc}" locked="${lock}" layoutInCell="1" allowOverlap="${allowOverlap}"><wp:simplePos x="0" y="0"/>${renderAnchorPosition(position, 'horizontal', ctx)}${renderAnchorPosition(position, 'vertical', ctx)}<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${wrap}<wp:docPr id="${drawingId}" name="Picture ${drawingId}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>${graphic}</wp:anchor></w:drawing>`;
+  return `<w:drawing><wp:anchor distT="${margin.top}" distB="${margin.bottom}" distL="${margin.left}" distR="${margin.right}" simplePos="0" relativeHeight="${Math.max(1, zOrder + 1)}" behindDoc="${behindDoc}" locked="${lock}" layoutInCell="1" allowOverlap="${allowOverlap}"><wp:simplePos x="0" y="0"/>${renderAnchorPosition(position, 'horizontal', ctx)}${renderAnchorPosition(position, 'vertical', ctx)}<wp:extent cx="${cx}" cy="${cy}"/><wp:effectExtent l="0" t="0" r="0" b="0"/>${wrap}<wp:docPr id="${drawingId}" name="${escapeXml(metadata.name)}"${metadata.description ? ` descr="${escapeXml(metadata.description)}"` : ''}/><wp:cNvGraphicFramePr><a:graphicFrameLocks noChangeAspect="1"/></wp:cNvGraphicFramePr>${graphic}</wp:anchor></w:drawing>`;
 }
 
 function renderAnchorPosition(
@@ -956,6 +1130,26 @@ function renderHeaderFooterParagraphs(element: Element, ctx: RenderContext): str
   return paragraphs.join('');
 }
 
+function renderNotesPart(kind: NotePart['kind'], notes: NotePart[], ctx: RenderContext): string {
+  const rootTag = kind === 'footnote' ? 'footnotes' : 'endnotes';
+  const separator = `<w:${kind} w:type="separator" w:id="-1"><w:p><w:r><w:separator/></w:r></w:p></w:${kind}>`;
+  const continuation = `<w:${kind} w:type="continuationSeparator" w:id="0"><w:p><w:r><w:continuationSeparator/></w:r></w:p></w:${kind}>`;
+  const actual = notes.map((note) => renderNote(note, ctx)).join('');
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:${rootTag} xmlns:w="${WORD_NS}" xmlns:r="${REL_NS}" xmlns:m="${MATH_NS}" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="${WPS_NS}">${separator}${continuation}${actual}</w:${rootTag}>`;
+}
+
+function renderNote(note: NotePart, ctx: RenderContext): string {
+  const subList = firstDirectChild(note.element, 'subList');
+  const paragraphs = subList ? directChildren(subList, 'p') : [];
+  const style = note.kind === 'footnote' ? 'FootnoteReference' : 'EndnoteReference';
+  const refTag = note.kind === 'footnote' ? 'footnoteRef' : 'endnoteRef';
+  const marker = `<w:r><w:rPr><w:rStyle w:val="${style}"/></w:rPr><w:${refTag}/></w:r><w:r><w:t xml:space="preserve"> </w:t></w:r>`;
+  const body = paragraphs.length
+    ? paragraphs.map((paragraph, index) => renderParagraph(paragraph, ctx, false, index === 0 ? marker : '')).join('')
+    : `<w:p>${marker}</w:p>`;
+  return `<w:${note.kind} w:id="${note.id}">${body}</w:${note.kind}>`;
+}
+
 async function collectImages(zip: JSZip): Promise<Map<string, ImageResource>> {
   const result = new Map<string, ImageResource>();
   const content = await readOptionalText(zip, ['Contents/content.hpf', 'contents/content.hpf']);
@@ -1008,7 +1202,7 @@ function renderStyles(catalog: StyleCatalog): string {
   const defaultFont = catalog.fonts.hangul.values().next().value
     ?? catalog.fonts.latin.values().next().value
     ?? 'Arial';
-  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${WORD_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${escapeXml(defaultFont)}" w:hAnsi="${escapeXml(defaultFont)}" w:eastAsia="${escapeXml(defaultFont)}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr/></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>`;
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="${WORD_NS}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="${escapeXml(defaultFont)}" w:hAnsi="${escapeXml(defaultFont)}" w:eastAsia="${escapeXml(defaultFont)}"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr/></w:pPrDefault></w:docDefaults><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style><w:style w:type="character" w:styleId="FootnoteReference"><w:name w:val="footnote reference"/><w:semiHidden/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style><w:style w:type="character" w:styleId="EndnoteReference"><w:name w:val="endnote reference"/><w:semiHidden/><w:rPr><w:vertAlign w:val="superscript"/></w:rPr></w:style></w:styles>`;
 }
 
 function renderSettings(ctx: PackageContext): string {
@@ -1030,6 +1224,8 @@ function renderContentTypes(ctx: PackageContext): string {
     '<Override PartName="/docProps/app.xml" ContentType="application/vnd.openxmlformats-officedocument.extended-properties+xml"/>',
   ];
   if (ctx.numberingIds.size) overrides.push('<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>');
+  if (ctx.footnotes.length) overrides.push('<Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>');
+  if (ctx.endnotes.length) overrides.push('<Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>');
   for (const part of ctx.headerFooterParts) {
     const type = part.kind === 'header'
       ? 'application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml'
@@ -1064,11 +1260,8 @@ function ensureNumberingId(ctx: RenderContext, key: string): number {
 function detectUnsupportedHwpxFeatures(root: Element, warnings: Set<string>): void {
   const names = new Set(Array.from(root.getElementsByTagName('*'), (element) => element.localName.toLowerCase()));
   const hasAny = (...values: string[]) => values.some((value) => names.has(value.toLowerCase()));
-  if (hasAny('rect', 'ellipse', 'line', 'polygon', 'curve', 'arc', 'connectLine', 'container', 'textart', 'ole', 'chart', 'video')) {
-    warnings.add('HWPX 도형/차트/OLE 일부는 현재 DOCX 직접 저장에서 제외되거나 단순화될 수 있습니다.');
-  }
-  if (hasAny('footnote', 'endnote', 'footNote', 'endNote')) {
-    warnings.add('HWPX 각주/미주는 현재 DOCX 직접 저장에서 본문 주석 구조로 변환되지 않습니다.');
+  if (hasAny('polygon', 'curve', 'arc', 'container', 'textart', 'ole', 'chart', 'video')) {
+    warnings.add('HWPX 자유곡선/복합 도형/차트/OLE 일부는 현재 DOCX 직접 저장에서 제외되거나 단순화될 수 있습니다.');
   }
   if (hasAny('fieldbegin', 'fieldend', 'fieldBegin', 'fieldEnd')) {
     warnings.add('HWPX 동적 필드는 현재 DOCX 직접 저장에서 Word 필드 코드로 완전히 변환되지 않습니다.');

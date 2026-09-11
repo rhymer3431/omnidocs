@@ -67,7 +67,7 @@ HWP/HWPX 저장 smoke test와 DOCX import smoke test를 함께 실행합니다.
 - DOCX import 시 페이지 크기, 여백, 기본 머리말/꼬리말 복원
 - DOCX import 시 명시적 문단 정렬/들여쓰기, 글꼴/크기, underline/highlight 보강
 - DOCX export: canonical HWPX XML을 직접 읽어 WordprocessingML/OOXML package 생성
-- DOCX export 시 문단/글자 서식, 번호 목록, 표/병합 셀, 이미지, 페이지 크기/여백, 다단, 머리말/꼬리말 직접 매핑
+- DOCX export 시 문단/글자 서식, 번호 목록, 표/병합 셀, 이미지, 기본 DrawingML 도형, 각주/미주, 페이지 크기/여백, 다단, 머리말/꼬리말 직접 매핑
 - HWPX floating image를 Word `wp:anchor`, floating table을 `w:tblpPr` 위치 정보로 직접 매핑
 - HWPX 수식 script의 분수/제곱·첨자/제곱근/합·곱·적분을 편집 가능한 Word OMML로 직접 변환
 - OMDX v1 ZIP package 및 SHA-256 무결성 검증
@@ -81,9 +81,9 @@ HWP/HWPX 저장 smoke test와 DOCX import smoke test를 함께 실행합니다.
 
 ## 알려진 제한
 
-편집된 문서를 DOCX로 저장할 때 HTML을 거치지 않습니다. floating 그림/표와 기본 수식은 OOXML 구조로
-직접 변환하지만, HWP 전용 복잡 수식 문법, 비정형 tight/through contour, Word/HWP 전용 field,
-일부 도형/차트/OLE는 아직 근사되거나 제외될 수 있습니다. 저장 시 해당 항목은 호환성 경고로 표시합니다.
+편집된 문서를 DOCX로 저장할 때 HTML을 거치지 않습니다. floating 그림/표, 사각형/타원/선 도형, 기본 수식,
+각주/미주는 OOXML 구조로 직접 변환합니다. HWP 전용 복잡 수식 문법, 비정형 tight/through contour,
+자유곡선/복합 도형, Word/HWP 전용 field, 차트/OLE는 아직 근사되거나 제외될 수 있습니다. 해당 항목은 호환성 경고로 표시합니다.
 원본 DOCX를 수정하지 않았다면 OMDX가 원본 바이트를 그대로 반환합니다.
 
 OMDX 파일 규격은 [docs/OMDX.md](./docs/OMDX.md), 전체 설계는 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고하세요.

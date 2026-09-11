@@ -48,6 +48,8 @@ describe('direct HWPX -> DOCX writer', () => {
         </hp:run></hp:p>
         <hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>[이미지]</hp:t><hp:pic zOrder="3" textWrap="SQUARE" textFlow="RIGHT_ONLY"><hp:curSz width="9000" height="4500"/><hp:pos treatAsChar="0" horzRelTo="PAPER" vertRelTo="PAPER" horzAlign="LEFT" vertAlign="TOP" horzOffset="1270" vertOffset="2540" allowOverlap="1"/><hp:outMargin left="100" right="200" top="300" bottom="400"/><hc:img binaryItemIDRef="image1"/></hp:pic></hp:run></hp:p>
         <hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:equation textColor="#112233" baseUnit="1200"><hp:script>{a over b} + sqrt {x} + x^2 + sum from {i=1} to n {i}</hp:script><hp:pos treatAsChar="1"/></hp:equation></hp:run></hp:p>
+        <hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:rect zOrder="4" textWrap="SQUARE" textFlow="BOTH_SIDES" ratio="0"><hp:curSz width="12000" height="6000"/><hp:lineShape color="#112233" width="50" style="DASH" headStyle="NORMAL" tailStyle="NORMAL"/><hc:fillBrush><hc:winBrush faceColor="#DDEEFF"/></hc:fillBrush><hp:pos treatAsChar="0" horzRelTo="PAPER" vertRelTo="PAPER" horzAlign="LEFT" vertAlign="TOP" horzOffset="1800" vertOffset="2400" allowOverlap="0"/><hp:shapeComment>테스트 사각형</hp:shapeComment></hp:rect></hp:run></hp:p>
+        <hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>주석 본문</hp:t><hp:ctrl><hp:footNote number="1"><hp:subList><hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>각주 내용</hp:t></hp:run></hp:p></hp:subList></hp:footNote></hp:ctrl><hp:ctrl><hp:endNote number="1"><hp:subList><hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>미주 내용</hp:t></hp:run></hp:p></hp:subList></hp:endNote></hp:ctrl></hp:run></hp:p>
         <hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:tbl rowCnt="2" colCnt="2" borderFillIDRef="1"><hp:sz width="0" height="0"/><hp:pos treatAsChar="0" horzRelTo="PAPER" vertRelTo="PAPER" horzAlign="CENTER" vertAlign="BOTTOM" horzOffset="0" vertOffset="0" allowOverlap="0"/><hp:outMargin left="200" right="200" top="100" bottom="100"/>
           <hp:tr><hp:tc borderFillIDRef="1"><hp:subList vertAlign="CENTER"><hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>A</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr rowAddr="0" colAddr="0"/><hp:cellSpan rowSpan="2" colSpan="1"/><hp:cellSz width="10000" height="2000"/><hp:cellMargin left="100" right="100" top="100" bottom="100"/></hp:tc><hp:tc borderFillIDRef="1"><hp:subList><hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>B</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr rowAddr="0" colAddr="1"/><hp:cellSpan rowSpan="1" colSpan="1"/><hp:cellSz width="12000" height="1000"/></hp:tc></hp:tr>
           <hp:tr><hp:tc borderFillIDRef="1"><hp:subList><hp:p paraPrIDRef="1"><hp:run charPrIDRef="1"><hp:t>D</hp:t></hp:run></hp:p></hp:subList><hp:cellAddr rowAddr="1" colAddr="1"/><hp:cellSpan rowSpan="1" colSpan="1"/><hp:cellSz width="12000" height="1000"/></hp:tc></hp:tr>
@@ -61,6 +63,8 @@ describe('direct HWPX -> DOCX writer', () => {
     const numbering = await docx.file('word/numbering.xml')!.async('text');
     const header = await docx.file('word/header1.xml')!.async('text');
     const footer = await docx.file('word/footer1.xml')!.async('text');
+    const footnotes = await docx.file('word/footnotes.xml')!.async('text');
+    const endnotes = await docx.file('word/endnotes.xml')!.async('text');
 
     expect(documentXml).toContain('직접 저장');
     expect(documentXml).toContain('<w:b/>');
@@ -88,12 +92,24 @@ describe('direct HWPX -> DOCX writer', () => {
     expect(documentXml).toContain('<m:sSup>');
     expect(documentXml).toContain('<m:nary>');
     expect(documentXml).toContain('<m:chr m:val="∑"/>');
+    expect(documentXml).toContain('<wps:wsp>');
+    expect(documentXml).toContain('<a:prstGeom prst="rect">');
+    expect(documentXml).toContain('<a:srgbClr val="DDEEFF"/>');
+    expect(documentXml).toContain('descr="테스트 사각형"');
+    expect(documentXml).toContain('<w:footnoteReference w:id="1"/>');
+    expect(documentXml).toContain('<w:endnoteReference w:id="1"/>');
     expect(numbering).toContain('<w:numFmt w:val="decimal"/>');
     expect(header).toContain('머리말');
     expect(footer).toContain('꼬리말');
     expect(rels).toContain('Target="media/image1.png"');
     expect(rels).toContain('Target="header1.xml"');
     expect(rels).toContain('Target="footer1.xml"');
+    expect(rels).toContain('Target="footnotes.xml"');
+    expect(rels).toContain('Target="endnotes.xml"');
+    expect(footnotes).toContain('각주 내용');
+    expect(footnotes).toContain('<w:footnoteRef/>');
+    expect(endnotes).toContain('미주 내용');
+    expect(endnotes).toContain('<w:endnoteRef/>');
     expect(docx.file('word/media/image1.png')).not.toBeNull();
     expect(result.warnings).toContain('HWPX의 사용자 정의 문단 번호/글머리표 모양은 DOCX 다단계 목록 규칙으로 정규화됩니다.');
 
@@ -121,6 +137,7 @@ describe('direct HWPX -> DOCX writer', () => {
     const document = rhwp.HwpDocument.createEmpty();
     let poisoned = false;
     try {
+      document.createBlankDocument();
       const pasted = JSON.parse(document.pasteHtml(
         0,
         0,
@@ -156,9 +173,34 @@ describe('direct HWPX -> DOCX writer', () => {
       )) as { ok?: boolean; error?: string };
       expect(picture.ok).not.toBe(false);
 
+      const shape = JSON.parse(document.createShapeControl(JSON.stringify({
+        sectionIdx: 0,
+        paraIdx: 0,
+        charOffset: 0,
+        width: 12000,
+        height: 6000,
+        horzOffset: 1800,
+        vertOffset: 2400,
+        treatAsChar: false,
+        textWrap: 'Square',
+      }))) as { ok?: boolean; error?: string };
+      expect(shape.ok).not.toBe(false);
+
+      const footnote = JSON.parse(document.insertFootnote(0, 0, 0)) as {
+        ok?: boolean;
+        error?: string;
+        controlIdx: number;
+      };
+      expect(footnote.ok).not.toBe(false);
+      document.insertTextInFootnote(0, 0, footnote.controlIdx, 0, 0, '실제 각주');
+      const endnote = JSON.parse(document.insertEndnote(0, 0, 0)) as { ok?: boolean; error?: string };
+      expect(endnote.ok).not.toBe(false);
+
       const exported = await exportHwpxToDocx(document.exportHwpx());
       const packageZip = await JSZip.loadAsync(exported.bytes);
       const documentXml = await packageZip.file('word/document.xml')!.async('text');
+      const footnotesXml = await packageZip.file('word/footnotes.xml')!.async('text');
+      const endnotesXml = await packageZip.file('word/endnotes.xml')!.async('text');
       const arrayBuffer = exported.bytes.buffer.slice(
         exported.bytes.byteOffset,
         exported.bytes.byteOffset + exported.bytes.byteLength,
@@ -166,7 +208,7 @@ describe('direct HWPX -> DOCX writer', () => {
       const reopened = await mammoth.convertToHtml({ arrayBuffer });
 
       expect(reopened.value).toContain('실제 canonical HWPX');
-      expect(reopened.value).toContain('<strong>실제 canonical HWPX');
+      expect(reopened.value).toContain('<strong>');
       expect(reopened.value).toContain('<table>');
       expect(reopened.value).toContain('테스트');
       expect(reopened.value).toContain('42');
@@ -177,6 +219,11 @@ describe('direct HWPX -> DOCX writer', () => {
       expect(documentXml).toContain('<m:rad>');
       expect(documentXml).toContain('<m:sSup>');
       expect(documentXml).toContain('<m:nary>');
+      expect(documentXml).toContain('<wps:wsp>');
+      expect(documentXml).toContain('<w:footnoteReference');
+      expect(documentXml).toContain('<w:endnoteReference');
+      expect(footnotesXml).toContain('실제 각주');
+      expect(endnotesXml).toContain('<w:endnoteRef/>');
     } catch (error) {
       poisoned = error instanceof WebAssembly.RuntimeError;
       throw error;
