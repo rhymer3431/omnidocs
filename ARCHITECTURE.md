@@ -40,10 +40,15 @@ UI는 rHWP의 구체 API를 직접 호출하지 않습니다. 따라서 후에 `
 
 ### `src/formats`
 
+- `canonical.ts`: 포맷 어댑터가 공유하는 얇은 canonical IR envelope와 feature inventory 계약
+- `sourceAdapters.ts`: HWP/HWPX/DOCX → canonical HWPX importer registry
+- `canonicalExport.ts`: canonical HWPX → HWP/HWPX/DOCX exporter registry
+- `hwpxDocxWriter.ts`: canonical HWPX → WordprocessingML 직접 serializer (HTML 미사용)
 - `rhwpRuntime.ts`: WASM 초기화와 공통 document 생성
 - `omdx.ts`: OMDX ZIP/manifest/checksum codec
 - `omdxGateway.ts`: HWP/HWPX/DOCX/OMDX → canonical OMDX gateway
 - `docxLayout.ts`: WordprocessingML page/margin/header/footer sidecar parser
+- `docxFeatures.ts`: OOXML feature inventory와 native/normalized/approximated/source-only 분류
 - `docxAdapter.ts`: DOCX ↔ canonical HWPX bridge
 
 현재 DOCX import는 `DOCX -> Mammoth semantic model + OOXML layout metadata -> HwpDocument -> OMDX` 경로입니다.
@@ -52,7 +57,11 @@ Mammoth transform에서 이미 읽힌 explicit alignment/indent/font/fontSize/hi
 보강합니다. underline도 custom style map으로 보존합니다. 페이지 크기/여백과 기본 머리말/꼬리말은
 `word/document.xml`과 relationship part에서 직접 추출합니다.
 
-현재 DOCX export는 `HWPX snapshot -> HwpDocument.renderPageHtml() -> DOCX` 경로입니다.
+현재 DOCX export는 `canonical HWPX XML -> WordprocessingML parts -> DOCX ZIP` 경로입니다. 문단/런의
+직접 서식, 번호 목록, 표와 병합 셀, 이미지 resource, section page geometry, column, header/footer를 OOXML로
+직접 serialize합니다. floating 그림은 `wp:anchor`, floating 표는 `w:tblpPr`로 위치/정렬/offset/wrap 정보를
+보존하고, HWP equation script의 분수·첨자·제곱근·합/곱/적분은 OMML로 구조화합니다. 페이지 렌더 HTML은
+DOCX 저장 경로에서 사용하지 않습니다.
 
 ### `src/ui`
 
@@ -66,6 +75,10 @@ OMDX는 Paragraph/TextRun을 새로 정의하는 두 번째 layout model이 아�
 
 원본 포맷의 unknown extension/metadata는 OMDX `source/original.*`에 그대로 보존하고 변환 손실 보고서는
 manifest `compatibility`에 기록합니다.
+
+`compatibility.features`에는 입력 문서에서 탐지된 주요 기능과 canonical 처리 수준을 기록합니다. 이 정보는
+편집 엔진을 두 번째로 구현하기 위한 Document AST가 아니라, adapter fidelity를 계측하고 이후 OOXML/HWP
+변환기 개선 우선순위를 정하기 위한 sidecar IR입니다. 실제 layout authority는 계속 canonical HWPX/rHWP입니다.
 
 ### 무손실 no-op 저장
 
@@ -120,9 +133,12 @@ Studio HTML/JS/CSS/WASM/폰트/이미지 자원을 수집하고 JS bundle에 고
 
 ### M3 — DOCX fidelity 향상
 
-HTML bridge에서 손실되는 기능을 fixture 기반으로 계측합니다. 손실이 큰 기능만 선택적으로 adapter를 보강합니다.
-
-문서 호환 요구가 HTML bridge의 한계를 넘는 시점에 LibreOfficeKit/Collabora converter를 **DOCX adapter 내부 구현만 교체**하는 방식으로 도입합니다. UI/편집 command API를 재작성하지 않습니다.
+- HTML 기반 DOCX export 제거 및 canonical HWPX → OOXML 직접 writer 도입 — 완료
+- direct writer의 문단/런/표/병합 셀/이미지/section/header-footer 기본 매핑 — 완료
+- floating image `wp:anchor` / floating table `w:tblpPr` 기본 위치 매핑 — 완료
+- HWP equation → OMML 기본 변환(분수/상·하첨자/제곱근/합·곱·적분) — 완료
+- 복잡 수식 문법, 도형/DrawingML, 각주/미주, field의 정밀 매핑은 fixture 기반으로 확대
+- 문서 호환 요구가 자체 writer의 범위를 넘는 경우 LibreOfficeKit/Collabora converter를 adapter 내부 대체 구현으로 도입
 
 ### M4 — Desktop packaging
 
@@ -141,7 +157,6 @@ rHWP Studio chrome을 줄이고 OmniDocs 자체 ribbon을 붙입니다. `studio.
 - rHWP: MIT
 - React/Vite: MIT
 - mammoth: BSD-2-Clause
-- html-docx-js-typescript: MIT
 - JSZip: MIT
 
 배포 시 `THIRD_PARTY_NOTICES.md`를 유지하고 실제 vendored Studio의 라이선스와 폰트 라이선스를 별도로 확인합니다.

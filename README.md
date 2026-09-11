@@ -6,7 +6,6 @@ OmniDocs는 **HWP, HWPX, DOCX를 OMDX라는 하나의 내부 문서 형식으로
 
 - `@rhwp/editor` / `@rhwp/core` (MIT): 실제 편집, 조판, 표, 커서, Undo/Redo, HWP/HWPX 읽기/쓰기
 - `mammoth` (BSD-2-Clause): DOCX → semantic HTML import
-- `html-docx-js-typescript` (MIT): HTML → DOCX export bridge
 - `JSZip` (MIT): OMDX/OOXML 컨테이너 처리
 - React + Vite: OmniDocs shell
 
@@ -67,7 +66,10 @@ HWP/HWPX 저장 smoke test와 DOCX import smoke test를 함께 실행합니다.
 - DOCX: Mammoth + OOXML sidecar parser를 통한 OMDX import
 - DOCX import 시 페이지 크기, 여백, 기본 머리말/꼬리말 복원
 - DOCX import 시 명시적 문단 정렬/들여쓰기, 글꼴/크기, underline/highlight 보강
-- DOCX export: rHWP page HTML을 DOCX로 패키징하는 bridge
+- DOCX export: canonical HWPX XML을 직접 읽어 WordprocessingML/OOXML package 생성
+- DOCX export 시 문단/글자 서식, 번호 목록, 표/병합 셀, 이미지, 페이지 크기/여백, 다단, 머리말/꼬리말 직접 매핑
+- HWPX floating image를 Word `wp:anchor`, floating table을 `w:tblpPr` 위치 정보로 직접 매핑
+- HWPX 수식 script의 분수/제곱·첨자/제곱근/합·곱·적분을 편집 가능한 Word OMML로 직접 변환
 - OMDX v1 ZIP package 및 SHA-256 무결성 검증
 - 원본 HWP/HWPX/DOCX immutable payload 보존
 - 수정하지 않은 원본 형식 저장 시 byte-exact round trip
@@ -79,8 +81,9 @@ HWP/HWPX 저장 smoke test와 DOCX import smoke test를 함께 실행합니다.
 
 ## 알려진 제한
 
-편집된 DOCX를 다시 DOCX로 만드는 경로는 아직 HTML bridge이므로 복잡한 floating shape, Word 전용 field,
-다중 section 일부는 단순화될 수 있습니다. 다만 원본 DOCX를 수정하지 않았다면 OMDX가 원본을 그대로 반환합니다.
-이후에는 fixture에서 실제 손실이 확인된 OOXML 기능만 adapter에 추가할 계획입니다.
+편집된 문서를 DOCX로 저장할 때 HTML을 거치지 않습니다. floating 그림/표와 기본 수식은 OOXML 구조로
+직접 변환하지만, HWP 전용 복잡 수식 문법, 비정형 tight/through contour, Word/HWP 전용 field,
+일부 도형/차트/OLE는 아직 근사되거나 제외될 수 있습니다. 저장 시 해당 항목은 호환성 경고로 표시합니다.
+원본 DOCX를 수정하지 않았다면 OMDX가 원본 바이트를 그대로 반환합니다.
 
 OMDX 파일 규격은 [docs/OMDX.md](./docs/OMDX.md), 전체 설계는 [ARCHITECTURE.md](./ARCHITECTURE.md)를 참고하세요.

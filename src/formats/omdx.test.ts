@@ -12,6 +12,11 @@ describe('OMDX package', () => {
       source: { format: 'docx', fileName: '원본.docx', bytes: source },
       importWarnings: ['compatibility note'],
       layout: { paper: 'A4' },
+      features: {
+        sourceFormat: 'docx',
+        adapter: 'omnidocs.docx-ooxml-v1',
+        features: [{ id: 'field', label: 'Word 필드', count: 1, handling: 'source-only' }],
+      },
     });
 
     const opened = await readOmdx(built.bytes);
@@ -21,6 +26,7 @@ describe('OMDX package', () => {
     expect(opened.manifest.canonical.pageCount).toBe(2);
     expect(opened.manifest.source?.canonicalSha256AtImport).toBe(opened.manifest.canonical.sha256);
     expect(opened.manifest.compatibility.importWarnings).toEqual(['compatibility note']);
+    expect(opened.manifest.compatibility.features?.features[0]).toMatchObject({ id: 'field', handling: 'source-only' });
 
     const zip = await JSZip.loadAsync(built.bytes);
     expect(await zip.file('mimetype')?.async('text')).toBe(OMDX_MIME);

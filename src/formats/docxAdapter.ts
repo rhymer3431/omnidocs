@@ -1,13 +1,17 @@
 import mammoth from 'mammoth/mammoth.browser';
-import { asBlob } from 'html-docx-js-typescript';
 import JSZip from 'jszip';
-import { createRhwpFromHtml, openRhwp } from './rhwpRuntime';
+import type { DocumentFeatureInventory } from './canonical';
+import { analyzeDocxFeatures } from './docxFeatures';
+import { createRhwpFromHtml } from './rhwpRuntime';
 import { extractDocxLayout, type DocxLayoutProfile } from './docxLayout';
+import { enrichHtmlWithDocxFormatting, flattenTopLevelLists, parseDocxParagraphProfiles } from './docxOoxml';
+import { patchHwpxSectionPageDefs } from './hwpxSections';
 
 export interface DocxImportResult {
   hwpxBytes: Uint8Array;
   warnings: string[];
   layout: DocxLayoutProfile;
+  features: DocumentFeatureInventory;
 }
 
 interface DocxTableStyle {
@@ -28,25 +32,37 @@ interface DocxImageLayout {
 }
 
 export async function importDocx(bytes: Uint8Array): Promise<DocxImportResult> {
-  const layout = await extractDocxLayout(bytes);
+  const [layout, features] = await Promise.all([
+    extractDocxLayout(bytes),
+    analyzeDocxFeatures(bytes),
+  ]);
   const arrayBuffer = bytes.buffer.slice(
     bytes.byteOffset,
     bytes.byteOffset + bytes.byteLength,
   ) as ArrayBuffer;
   const converted = await convertDocxToLayoutHtml(arrayBuffer);
+  const firstSection = layout.sections[0];
   const document = await createRhwpFromHtml(converted.html, {
     pageDef: layout.pageDef,
     headerText: layout.headerText,
     footerText: layout.footerText,
+    headers: firstSection?.headers,
+    footers: firstSection?.footers,
   });
   try {
+    const patchedSections = await patchHwpxSectionPageDefs(
+      document.exportHwpx(),
+      layout.sections.map((section) => section.pageDef),
+    );
     return {
-      hwpxBytes: document.exportHwpx(),
+      hwpxBytes: patchedSections.bytes,
       warnings: [
         ...converted.warnings,
         ...layout.warnings,
+        ...patchedSections.warnings,
       ],
       layout,
+      features,
     };
   } finally {
     document.free();
@@ -77,6 +93,17 @@ export async function convertDocxToLayoutHtml(arrayBuffer: ArrayBuffer): Promise
     if (run.font) declarations.push(`font-family:${quoteCssFont(run.font)}`);
     if (run.fontSize) declarations.push(`font-size:${run.fontSize}pt`);
     if (run.highlight && run.highlight !== 'none') declarations.push(`background-color:${run.highlight}`);
+    // Mammoth nests <strong>/<em>/<u> inside our generated style span. rHWP
+    // treats a <span> as one atomic inline run and does not recursively inspect
+    // those nested tags, so mirror the semantic flags onto the span CSS as well.
+    if (run.isBold) declarations.push('font-weight:bold');
+    if (run.isItalic) declarations.push('font-style:italic');
+    const decorations: string[] = [];
+    if (run.isUnderline) decorations.push('underline');
+    if (run.isStrikethrough) decorations.push('line-through');
+    if (decorations.length) declarations.push(`text-decoration:${decorations.join(' ')}`);
+    if (run.verticalAlignment === 'superscript') declarations.push('vertical-align:super');
+    if (run.verticalAlignment === 'subscript') declarations.push('vertical-align:sub');
     if (!declarations.length) return run;
 
     const className = `omdx-r-${runStyleIndex++}`;
@@ -123,9 +150,12 @@ export async function enrichHtmlFromDocxOoxml(
   const zip = await JSZip.loadAsync(arrayBuffer);
   const documentXml = await zip.file('word/document.xml')?.async('text');
   if (!documentXml) return { html, warnings: [] };
+  const stylesXml = await zip.file('word/styles.xml')?.async('text');
 
   const parsed = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
   const body = parsed.body;
+  const paragraphProfiles = parseDocxParagraphProfiles(documentXml, stylesXml);
+  const formatting = enrichHtmlWithDocxFormatting(body, paragraphProfiles);
   const tableStyles = parseDocxTables(documentXml);
   const imageLayouts = parseDocxImages(documentXml);
   const htmlTables = Array.from(body.querySelectorAll('table'));
@@ -142,19 +172,28 @@ export async function enrichHtmlFromDocxOoxml(
     if (layout.heightPx) image.setAttribute('height', formatNumber(layout.heightPx));
   }
 
+  flattenTopLevelLists(body);
+
   // rHWP 0.8.6 only recognises <img> at the block parser level. Mammoth emits
   // inline images inside <p>, and parse_inline_content() ignores <img>, so the
   // image silently disappears. Split image-bearing paragraphs around each image
   // and promote the image to a top-level block. This approximates inline flow,
   // but preserves the actual image and its Word dimensions instead of dropping it.
+  const hadInlineImages = htmlImages.some((image) => image.closest('p'));
   promoteParagraphImages(body);
 
   const warnings: string[] = [];
-  if (htmlImages.some((image) => image.closest('p'))) {
+  if (hadInlineImages) {
     warnings.push('DOCX 인라인 그림은 현재 OMDX에서 그림 크기를 보존한 블록 배치로 변환됩니다.');
   }
   if (tableStyles.length > 0 && htmlTables.length !== tableStyles.length) {
     warnings.push('DOCX 표 일부의 레이아웃 메타데이터를 정확히 대응하지 못해 일부 표 서식이 단순화될 수 있습니다.');
+  }
+  if (formatting.totalParagraphs > 0 && formatting.matchedParagraphs / formatting.totalParagraphs < 0.7) {
+    warnings.push('DOCX 문단 일부를 OOXML 서식과 정확히 대응하지 못해 복합 필드/텍스트박스 서식이 단순화될 수 있습니다.');
+  }
+  if (formatting.sectionBreakApproximation) {
+    warnings.push('표/목록 내부와 인접한 DOCX 구역 나누기는 가장 가까운 블록 경계로 정규화됩니다.');
   }
 
   return { html: body.innerHTML, warnings };
@@ -385,26 +424,15 @@ function normalizeWordColor(value?: string): string | undefined {
 }
 
 function applyCssDeclarations(element: HTMLElement, css: string) {
-  const current = element.getAttribute('style');
-  element.setAttribute('style', [current, css].filter(Boolean).join(';'));
+  for (const declaration of css.split(';')) {
+    const colon = declaration.indexOf(':');
+    if (colon <= 0) continue;
+    const property = declaration.slice(0, colon).trim();
+    const value = declaration.slice(colon + 1).trim();
+    if (property && value) element.style.setProperty(property, value);
+  }
 }
 
 function formatNumber(value: number): string {
   return String(Math.round(value * 100) / 100);
-}
-
-export async function exportDocx(hwpxBytes: Uint8Array): Promise<Uint8Array> {
-  const document = await openRhwp(hwpxBytes);
-  try {
-    const pages: string[] = [];
-    for (let page = 0; page < document.pageCount(); page += 1) {
-      pages.push(`<section class="omnidocs-page">${document.renderPageHtml(page)}</section>`);
-    }
-    const html = `<!doctype html><html><head><meta charset="utf-8"></head><body>${pages.join('')}</body></html>`;
-    const binary = await asBlob(html);
-    if (binary instanceof Uint8Array) return Uint8Array.from(binary);
-    return new Uint8Array(await binary.arrayBuffer());
-  } finally {
-    document.free();
-  }
 }

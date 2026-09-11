@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import type { SourceFormat } from '../domain/document';
+import type { DocumentFeatureInventory } from './canonical';
 
 export const OMDX_MIME = 'application/vnd.omnidocs.document+zip';
 export const OMDX_SCHEMA = 'org.omnidocs.omdx';
@@ -36,6 +37,7 @@ export interface OmdxManifest {
     importWarnings: string[];
     contentLoss?: unknown;
     layout?: unknown;
+    features?: DocumentFeatureInventory;
   };
 }
 
@@ -52,6 +54,7 @@ export interface BuildOmdxOptions {
   importWarnings?: string[];
   contentLoss?: unknown;
   layout?: unknown;
+  features?: DocumentFeatureInventory;
   previousManifest?: OmdxManifest;
 }
 
@@ -84,6 +87,7 @@ export async function buildOmdx(options: BuildOmdxOptions): Promise<{ bytes: Uin
       importWarnings: options.importWarnings ?? options.previousManifest?.compatibility.importWarnings ?? [],
       contentLoss: options.contentLoss ?? options.previousManifest?.compatibility.contentLoss,
       layout: options.layout ?? options.previousManifest?.compatibility.layout,
+      features: options.features ?? options.previousManifest?.compatibility.features,
     },
   };
 

@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+import { JSDOM } from 'jsdom';
 import {
   AlignmentType,
   BorderStyle,
@@ -12,8 +12,24 @@ import {
   TextRun,
   WidthType,
 } from 'docx';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { convertDocxToLayoutHtml } from './docxAdapter';
+import { decodeOmdxFormat, OMDX_CHAR_FORMAT_ATTR, OMDX_PARA_FORMAT_ATTR } from './docxOoxml';
+
+const originalDOMParser = globalThis.DOMParser;
+const originalNode = globalThis.Node;
+
+beforeAll(() => {
+  const dom = new JSDOM();
+  Object.assign(globalThis, {
+    DOMParser: dom.window.DOMParser,
+    Node: dom.window.Node,
+  });
+});
+
+afterAll(() => {
+  Object.assign(globalThis, { DOMParser: originalDOMParser, Node: originalNode });
+});
 
 const ONE_PIXEL_PNG = Uint8Array.from([
   137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
@@ -24,13 +40,26 @@ const ONE_PIXEL_PNG = Uint8Array.from([
 ]);
 
 describe('DOCX semantic style bridge', () => {
-  it('keeps explicit paragraph alignment, run font/size, bold and underline in HTML', async () => {
+  it('keeps Word paragraph geometry and character formatting as rHWP-native metadata', async () => {
     const fixture = new Document({
       sections: [{
         children: [
           new Paragraph({
             alignment: AlignmentType.CENTER,
-            children: [new TextRun({ text: '서식 보존', font: 'Arial', size: 28, bold: true, underline: {} })],
+            indent: { left: 720, firstLine: 360 },
+            spacing: { before: 240, after: 120, line: 360 },
+            keepNext: true,
+            pageBreakBefore: true,
+            children: [new TextRun({
+              text: '서식 보존',
+              font: { ascii: 'Arial', hAnsi: 'Arial', eastAsia: 'Malgun Gothic' },
+              size: 28,
+              bold: true,
+              italics: true,
+              underline: {},
+              color: 'FF0000',
+              superScript: true,
+            })],
           }),
         ],
       }],
@@ -39,12 +68,41 @@ describe('DOCX semantic style bridge', () => {
     const arrayBuffer = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
     const converted = await convertDocxToLayoutHtml(arrayBuffer);
 
-    expect(converted.html).toContain('text-align:center');
-    expect(converted.html).toContain('font-family:Arial');
+    expect(converted.html).toContain('font-weight:bold');
     expect(converted.html).toContain('font-size:14pt');
-    expect(converted.html).toContain('<strong>');
-    expect(converted.html).toContain('<u>');
     expect(converted.html).toContain('서식 보존');
+
+    const parsed = new DOMParser().parseFromString(`<body>${converted.html}</body>`, 'text/html');
+    const paragraph = parsed.body.querySelector('p');
+    const formattedRun = parsed.body.querySelector(`[${OMDX_CHAR_FORMAT_ATTR}]`);
+    const paraFormat = decodeOmdxFormat<Record<string, unknown>>(
+      paragraph?.getAttribute(OMDX_PARA_FORMAT_ATTR) ?? null,
+    );
+    const charFormat = decodeOmdxFormat<Record<string, unknown>>(
+      formattedRun?.getAttribute(OMDX_CHAR_FORMAT_ATTR) ?? null,
+    );
+
+    expect(paragraph?.style.textAlign).toBe('center');
+    expect(paraFormat).toMatchObject({
+      alignment: 'center',
+      marginLeft: 3600,
+      indent: 1800,
+      spacingBefore: 1200,
+      spacingAfter: 600,
+      lineSpacing: 150,
+      lineSpacingType: 'Percent',
+      keepWithNext: true,
+      pageBreakBefore: true,
+    });
+    expect(charFormat).toMatchObject({
+      fontName: 'Malgun Gothic',
+      fontSize: 1400,
+      textColor: '#FF0000',
+      bold: true,
+      italic: true,
+      underline: true,
+      superscript: true,
+    });
   });
 
   it('restores Word table geometry and promotes inline images so rHWP does not drop them', async () => {

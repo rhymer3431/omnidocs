@@ -53,7 +53,15 @@ OmniDocs 화면에서는 같은 pagination/layout engine을 사용한다.
   "compatibility": {
     "importWarnings": [],
     "contentLoss": {},
-    "layout": {}
+    "layout": {},
+    "features": {
+      "sourceFormat": "docx",
+      "adapter": "omnidocs.docx-ooxml-v1",
+      "features": [
+        { "id": "table", "label": "표", "count": 2, "handling": "native" },
+        { "id": "field", "label": "Word 필드", "count": 1, "handling": "source-only" }
+      ]
+    }
   }
 }
 ```
@@ -80,8 +88,15 @@ run의 글꼴/크기/underline/highlight도 Mammoth document transform을 통해
                      ┌──> .omdx  canonical + source + manifest
 current canonical ───┼──> .hwpx  canonical 그대로
                      ├──> .hwp   rHWP serializer + content-loss report
-                     └──> .docx  DOCX bridge
+                     └──> .docx  HWPX XML → WordprocessingML direct writer
 ```
+
+DOCX writer는 `renderPageHtml()` 같은 화면 렌더 결과를 저장에 사용하지 않습니다. canonical HWPX의
+문단/글자 속성, 표/셀 병합, 이미지 binary resource, section의 용지/여백/단, 머리말/꼬리말을 읽어
+OOXML part와 relationship을 직접 생성합니다. 떠있는 그림은 `wp:anchor`, 떠있는 표는 `w:tblpPr`로
+위치와 wrapping 정보를 매핑합니다. HWP equation script는 분수, 상/하첨자, 제곱근, 합/곱/적분을
+Word OMML 노드로 구조화하고 지원하지 않는 고급 수식 문법은 편집 가능한 수식 텍스트로 보존하면서
+호환성 경고를 기록합니다.
 
 원본이 DOCX/HWP/HWPX이고 canonical이 import 이후 바뀌지 않았다면 해당 원본 형식 저장은 원본 바이트를
 그대로 사용한다. 이 경로는 unknown/unsupported feature까지 보존하므로 가장 강한 no-op round trip이다.
@@ -92,3 +107,5 @@ current canonical ───┼──> .hwpx  canonical 그대로
 2. 원본 포맷의 알 수 없는 데이터는 삭제하지 않고 OMDX source payload에 보존한다.
 3. 변환 손실은 숨기지 않고 `compatibility`에 기록한다.
 4. 포맷 adapter가 개선되어도 OMDX v1의 canonical/source 계약은 유지한다.
+5. `compatibility.features`는 포맷별 기능을 `native`, `normalized`, `approximated`, `source-only`로 분류해
+   실제 fixture 기반 호환성 개선의 측정 지표로 사용한다.

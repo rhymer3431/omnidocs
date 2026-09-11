@@ -9,10 +9,12 @@ export interface EditorCommand {
 
 export interface OmniEditorEngine {
   mount(container: HTMLElement): Promise<void>;
+  newDocument(fileName?: string): Promise<LoadResult>;
   load(file: OmniFile): Promise<LoadResult>;
   export(format: OmniFormat, sourceName: string): Promise<ExportResult>;
   execute(commandId: string, params?: unknown): Promise<unknown>;
   listCommands(): Promise<EditorCommand[]>;
   isDirty(): boolean;
+  onDirtyChange(listener: (dirty: boolean) => void): () => void;
   destroy(): void;
 }

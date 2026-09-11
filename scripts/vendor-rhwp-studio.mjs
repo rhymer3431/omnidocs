@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -54,6 +54,12 @@ function discover(text, from) {
     /["'](\/rhwp\/[^"'\s)]+)["']/g,
     /["']((?:\.\.\/|\.\/)?fonts\/[^"'\s)]+)["']/g,
     /["']((?:\.\.\/|\.\/)?images\/[^"'\s)]+)["']/g,
+    // Vite lazy chunks, including `import(`./studio-plugin-*.js`)`.
+    /\bimport\s*\(\s*["'`]([^"'`]+)["'`]\s*\)/g,
+    // Vite PWA precache manifest entries. These also include lazy chunks that
+    // are not referenced by ordinary src/href attributes in index.html.
+    /\burl\s*:\s*["'`]([^"'`]+)["'`]/g,
+    /["'`]((?:\.\.\/|\.\/)?assets\/[^"'`\s)]+)["'`]/g,
   ];
   for (const pattern of patterns) {
     for (const match of text.matchAll(pattern)) enqueue(match[1], from);
@@ -100,7 +106,29 @@ if (builtJs) {
   if (!text.includes(VERSION)) {
     throw new Error(`Published rHWP Studio does not appear to match pinned version ${VERSION}.`);
   }
+
+  const requiredLazyChunks = [
+    ...text.matchAll(/(?:import\s*\(\s*)?["'`]\.\/(studio-plugin-[^"'`]+\.js)["'`]/g),
+  ].map((match) => match[1]);
+  if (!requiredLazyChunks.length) {
+    throw new Error('Published rHWP Studio bundle does not expose the expected hwpctrl plugin chunk.');
+  }
+  for (const fileName of requiredLazyChunks) {
+    await access(join(outputRoot, 'assets', fileName));
+  }
 }
+
+// OmniDocs embeds Studio in an iframe and owns its lifecycle. Registering the
+// upstream PWA service worker inside that iframe can keep an older Studio
+// bundle cached after an OmniDocs update, which in turn produces misleading
+// plugin errors. Keep the vendored runtime network-local but disable PWA
+// registration for the embedded copy.
+const indexPath = join(outputRoot, 'index.html');
+let indexHtml = await readFile(indexPath, 'utf8');
+indexHtml = indexHtml
+  .replace(/<script\b[^>]*id=["']vite-plugin-pwa:register-sw["'][^>]*><\/script>/gi, '')
+  .replace(/<link\b[^>]*rel=["']manifest["'][^>]*>/gi, '');
+await writeFile(indexPath, indexHtml);
 
 await writeFile(
   join(outputRoot, '.omnidocs-vendor.json'),

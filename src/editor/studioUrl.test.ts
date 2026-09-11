@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveStudioUrl } from './studioUrl';
+import { resolveStudioUrl, unregisterLegacyRhwpServiceWorker } from './studioUrl';
 
 describe('resolveStudioUrl', () => {
   it('uses the self-hosted studio by default', () => {
@@ -12,5 +12,11 @@ describe('resolveStudioUrl', () => {
     expect(resolveStudioUrl('https://example.com/editor/', 'http://localhost:5173/')).toBe(
       'https://example.com/editor/',
     );
+  });
+});
+
+describe('unregisterLegacyRhwpServiceWorker', () => {
+  it('is a no-op in environments without serviceWorker support', async () => {
+    await expect(unregisterLegacyRhwpServiceWorker()).resolves.toBeUndefined();
   });
 });
